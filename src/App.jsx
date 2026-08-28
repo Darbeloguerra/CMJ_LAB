@@ -724,7 +724,12 @@ function AuthGate({ children }) {
       <div style={{ marginTop: 12, fontSize: 11, color: "#EF4444", wordBreak: "break-all" }}>Detalle técnico: {initError || "sin detalle"}</div>
     </div></div>;
   }
-  if (status === "unlocked") return children;
+  function handleLogout() {
+    localStorage.removeItem(LS_REMEMBER);
+    setStatus("login");
+  }
+
+  if (status === "unlocked") return children(handleLogout);
 
   if (status === "setup") {
     return <AuthSetupForm onSubmit={handleSetup} error={error} busy={busy} />;
@@ -887,10 +892,10 @@ function Avatar({ texto, size = 38 }) {
 
 // ================= App =================
 export default function App() {
-  return <AuthGate><AppContent /></AuthGate>;
+  return <AuthGate>{(logout) => <AppContent onLogout={logout} />}</AuthGate>;
 }
 
-function AppContent() {
+function AppContent({ onLogout }) {
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState([]);
   const [microciclos, setMicrociclos] = useState([]);
@@ -906,6 +911,7 @@ function AppContent() {
   const [showThresholdInfo, setShowThresholdInfo] = useState(false);
   const [roster, setRoster] = useState([]);
   const [plantillas, setPlantillas] = useState([]);
+  const [confirmLogout, setConfirmLogout] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -1137,6 +1143,16 @@ function AppContent() {
             {microList.length} microciclos guardados<br/>
             {saveWarning && <><span style={{ color: "#F5C518" }}>Cambios no guardados</span> <button style={S.retryBtn} onClick={retrySave}>Reintentar guardado</button></>}
           </div>
+          {confirmLogout ? (
+            <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
+              <button style={{ ...S.settingsBtn, flex: 1, borderColor: "#EF4444", color: "#EF4444" }} onClick={onLogout}>Confirmar</button>
+              <button style={{ ...S.settingsBtn, flex: 1 }} onClick={() => setConfirmLogout(false)}>Cancelar</button>
+            </div>
+          ) : (
+            <button style={{ ...S.settingsBtn, marginTop: 10, color: "#EF4444", borderColor: "#EF4444" }} onClick={() => setConfirmLogout(true)}>
+              Cerrar sesión
+            </button>
+          )}
         </nav>
 
         <main style={S.main}>
