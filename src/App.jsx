@@ -8,8 +8,8 @@ import {
 // (ver GUIA_DESPLIEGUE.md). API_TOKEN debe coincidir exactamente con el
 // definido en el Code.gs del Apps Script — es lo que impide que cualquiera
 // que encuentre la URL pueda leer/escribir en tu Sheet sin pasar por la app.
-const API_URL = "PON_AQUI_TU_URL_DE_APPS_SCRIPT"; // termina en /exec
-const API_TOKEN = "PON_AQUI_TU_TOKEN_SECRETO";
+const API_URL = "https://script.google.com/macros/s/AKfycbxh7u6-X2e6wQhbdgfbNOIZYAfiV_gLQszpWpJdGhXMbvgp32SR3pbi33giYXJ0-aXOsg/exec";
+const API_TOKEN = "wtt5teGfYTidgZ9TGD19RhF4bJkt7mYPliUULocb";
 
 // ================= Storage keys =================
 const K_DATASET = "cmj_dataset_v1";
@@ -666,15 +666,18 @@ function AuthGate({ children }) {
   const [claveGenerada, setClaveGenerada] = useState("");
   const [copiado, setCopiado] = useState(false);
 
+  const [initError, setInitError] = useState("");
+
   useEffect(() => {
     (async () => {
       try {
         const r = await apiCall("auth_status");
-        if (!r.ok) { setStatus("error-init"); return; }
+        if (!r.ok) { setInitError(JSON.stringify(r)); setStatus("error-init"); return; }
         if (!r.configurado) { setStatus("setup"); return; }
         const recordado = localStorage.getItem(LS_REMEMBER) === "1";
         setStatus(recordado ? "unlocked" : "login");
-      } catch {
+      } catch (err) {
+        setInitError(String(err && err.message ? err.message : err));
         setStatus("error-init");
       }
     })();
@@ -718,6 +721,7 @@ function AuthGate({ children }) {
   if (status === "error-init") {
     return <div style={S.authScreen}><div style={S.authBox}>
       No se pudo comprobar el acceso. Recarga la página. Si el problema persiste, revisa que API_URL/API_TOKEN estén bien configurados y que el Apps Script esté desplegado con acceso "Cualquier usuario".
+      <div style={{ marginTop: 12, fontSize: 11, color: "#EF4444", wordBreak: "break-all" }}>Detalle técnico: {initError || "sin detalle"}</div>
     </div></div>;
   }
   if (status === "unlocked") return children;
