@@ -1011,6 +1011,17 @@ function AppContent({ onLogout }) {
     await saveJSON(K_ROSTER, next);
   }, [roster]);
 
+  const anadirTodosAPlantilla = useCallback(async (nombres, plantillaId) => {
+    const byName = new Map(roster.map(r => [r.nombre, r]));
+    nombres.forEach(nombre => {
+      const existente = byName.get(nombre);
+      byName.set(nombre, existente ? { ...existente, plantillaId } : { nombre, posicion: null, plantillaId });
+    });
+    const next = Array.from(byName.values());
+    setRoster(next);
+    await saveJSON(K_ROSTER, next);
+  }, [roster]);
+
   const quitarDePlantilla = useCallback(async (nombre) => {
     const next = roster.map(r => r.nombre === nombre ? { ...r, plantillaId: null } : r);
     setRoster(next);
@@ -1178,6 +1189,7 @@ function AppContent({ onLogout }) {
               onSetPosicion={setPosicion} onAddManual={addManualPlayer}
               plantillas={plantillas} onCrearPlantilla={crearPlantilla} onRenombrarPlantilla={renombrarPlantilla}
               onEliminarPlantilla={eliminarPlantilla} onSetPlantillaDeJugador={setPlantillaDeJugador} onQuitarDePlantilla={quitarDePlantilla}
+              onAnadirTodos={anadirTodosAPlantilla}
               allPlayers={allPlayers} microList={microList} ambarPct={ambarPct} rojoPct={rojoPct} />
           )}
           {tab === "ranking" && (
@@ -1732,7 +1744,7 @@ function Ranking({ players, roster, microList }) {
 // ================= Tab: Jugadores (plantilla + ficha) =================
 function Jugadores({ allNames, roster, onToggle, onSetAll, onSetPosicion, onAddManual,
   plantillas, onCrearPlantilla, onRenombrarPlantilla, onEliminarPlantilla, onSetPlantillaDeJugador, onQuitarDePlantilla,
-  allPlayers, microList, ambarPct, rojoPct }) {
+  onAnadirTodos, allPlayers, microList, ambarPct, rojoPct }) {
   const [plantillaSel, setPlantillaSel] = useState(null);
   const [nuevaPlantilla, setNuevaPlantilla] = useState("");
   const [mostrarCrear, setMostrarCrear] = useState(false);
@@ -1866,6 +1878,12 @@ function Jugadores({ allNames, roster, onToggle, onSetAll, onSetPosicion, onAddM
               </select>
             </div>
           </div>
+          {disponiblesParaAnadir.length > 0 && (
+            <button style={{ ...S.applyBtn, marginBottom: 4 }}
+              onClick={() => { onAnadirTodos(disponiblesParaAnadir, plantilla.id); setMostrarAnadir(false); }}>
+              Añadir todos los jugadores del CSV ({disponiblesParaAnadir.length})
+            </button>
+          )}
           <div style={S.controlsDivider} />
           <div style={S.formRow}>
             <div style={S.formField}>
