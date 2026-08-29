@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useCallback, useEffect } from "react";
 import {
-  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer
+  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine
 } from "recharts";
 
 // ================= Backend (Google Apps Script) =================
@@ -1982,15 +1982,18 @@ function CargadorCSV({ onFile, issues, rows, onClear }) {
 // Punto de dato ampliado con la unidad de la variable escrita dentro —
 // permite leer a qué corresponde cada punto sin depender del color o de
 // la leyenda, y ayuda a diferenciar variables que coincidan visualmente.
-function crearDotConUnidad(unidad, onDotClick) {
+function crearDotConUnidad(unidad, onDotClick, metricKey, puntoActivo) {
   return (props) => {
     const { cx, cy, stroke, index, dataKey } = props;
     if (cx == null || cy == null) return null;
+    const mostrarUnidad = puntoActivo != null && puntoActivo.index === index && puntoActivo.metricKey === metricKey;
     return (
       <g key={`dot-${unidad}-${index}`} style={{ cursor: "pointer" }}
-        onClick={() => onDotClick && onDotClick({ index, stroke, dataKey })}>
+        onClick={() => onDotClick && onDotClick({ index, stroke, dataKey, cx, cy })}>
         <circle cx={cx} cy={cy} r={15} fill={stroke} stroke="#060D1A" strokeWidth={1.5} />
-        <text x={cx} y={cy} dy={3} textAnchor="middle" fontSize={7} fontWeight={700} fill="#060D1A" style={{ pointerEvents: "none" }}>{unidad}</text>
+        {mostrarUnidad && (
+          <text x={cx} y={cy} dy={3} textAnchor="middle" fontSize={7} fontWeight={700} fill="#060D1A" style={{ pointerEvents: "none" }}>{unidad}</text>
+        )}
       </g>
     );
   };
@@ -2009,18 +2012,16 @@ function PlayerDetail({ player, microList, posicion }) {
   const [showControls, setShowControls] = useState(false);
   const [showUmbralInfo, setShowUmbralInfo] = useState(false);
   const [showTablaInfo, setShowTablaInfo] = useState(false);
-  const [puntoActivo, setPuntoActivo] = useState(null); // { index, mode: 'single'|'full', metricKey, color }
+  const [puntoActivo, setPuntoActivo] = useState(null); // { index, metricKey, mode: 'single'|'full', color, cx, cy }
 
-  const handleDotClick = ({ index, stroke, dataKey }) => {
+  const handleDotClick = ({ index, stroke, dataKey, cx, cy }) => {
     const metricKey = String(dataKey).replace(/_raw$/, "");
     setPuntoActivo(prev => {
-      if (!prev || prev.index !== index) {
-        return { index, mode: "single", metricKey, color: stroke };
+      if (!prev || prev.index !== index || prev.metricKey !== metricKey) {
+        return { index, metricKey, mode: "single", color: stroke, cx, cy };
       }
-      if (prev.mode === "single") {
-        return { ...prev, mode: "full" };
-      }
-      return { index, mode: "single", metricKey, color: stroke };
+      if (prev.mode === "single") return { ...prev, mode: "full" };
+      return null; // tercer toque sobre el mismo punto: cierra
     });
   };
 
@@ -2213,63 +2214,51 @@ function PlayerDetail({ player, microList, posicion }) {
               })}
             </div>
           )}
-          <div style={{ marginBottom: 10 }}>
+          <div style={{ position: "relative", marginBottom: 10 }}>
             <ResponsiveContainer width="100%" height={300}>
               <LineChart data={chartData} margin={{ top: 18, right: 20, left: -4, bottom: 6 }}>
                 <CartesianGrid stroke="#1A3050" vertical={false} />
                 <XAxis dataKey="dateLabel" tick={{ fill: "#8BA4C0", fontSize: 11 }} interval="preserveStartEnd" padding={{ left: 20, right: 20 }} />
                 <YAxis tick={{ fill: "#8BA4C0", fontSize: 11 }} domain={dominioChart} allowDataOverflow tickFormatter={(v) => v.toFixed(1)} />
                 <Legend wrapperStyle={{ fontSize: 12 }} formatter={(value) => METRICS[value]?.label || value} />
+                {puntoActivo?.mode === "full" && chartData[puntoActivo.index] && (
+                  <ReferenceLine x={chartData[puntoActivo.index].dateLabel} stroke="#F0F4FF" strokeOpacity={0.5} strokeDasharray="3 3" />
+                )}
                 {metricasMostradas.map(metric => (
                   <Line key={metric.key} type="monotone"
                     dataKey={vista === "pct" ? metric.key : `${metric.key}_raw`} name={metric.key}
                     stroke={METRIC_CHART_COLOR[metric.key]} strokeWidth={2} connectNulls
-                    dot={crearDotConUnidad(vista === "pct" ? "%" : metric.unit, handleDotClick)} />
+                    dot={crearDotConUnidad(vista === "pct" ? "%" : metric.unit, handleDotClick, metric.key, puntoActivo)} />
                 ))}
               </LineChart>
             </ResponsiveContainer>
-          </div>
-          {puntoActivo != null && chartData[puntoActivo.index] && (
-            <div style={S.umbralNote}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <b>
-                  {chartData[puntoActivo.index].dateLabel}
-                  {chartData[puntoActivo.index].tag ? ` · ${TAG_META[chartData[puntoActivo.index].tag]?.label || ""}` : ""}
-                </b>
-                <button style={S.authLink} onClick={() => setPuntoActivo(null)}>Cerrar</button>
+            {puntoActivo?.mode === "full" && chartData[puntoActivo.index] && (
+              <div style={{
+                ...S.chartFloatingTooltip,
+                left: puntoActivo.cx,
+                top: 6,
+                transform: "translateX(-50%)"
+              }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
+                  <b>
+                    {chartData[puntoActivo.index].dateLabel}
+                    {chartData[puntoActivo.index].tag ? ` · ${TAG_META[chartData[puntoActivo.index].tag]?.label || ""}` : ""}
+                  </b>
+                  <button style={{ ...S.authLink, fontSize: 11 }} onClick={() => setPuntoActivo(null)}>✕</button>
+                </div>
+                {metricasMostradas.map(metric => {
+                  const raw = chartData[puntoActivo.index][`${metric.key}_raw`];
+                  const pct = chartData[puntoActivo.index][metric.key];
+                  return (
+                    <div key={metric.key} style={{ color: METRIC_CHART_COLOR[metric.key], fontWeight: 700, marginTop: 2 }}>
+                      {metric.label}: {fmt(raw, metric.decimals)} {metric.unit}
+                      {vista === "pct" && pct != null ? ` (${pct > 0 ? "+" : ""}${pct.toFixed(1)}%)` : ""}
+                    </div>
+                  );
+                })}
               </div>
-              {puntoActivo.mode === "single" ? (
-                <div style={{ marginTop: 6 }}>
-                  {(() => {
-                    const metric = METRICS[puntoActivo.metricKey];
-                    if (!metric) return null;
-                    const raw = chartData[puntoActivo.index][`${metric.key}_raw`];
-                    const pct = chartData[puntoActivo.index][metric.key];
-                    return (
-                      <span style={{ color: puntoActivo.color, fontWeight: 700 }}>
-                        {metric.label}: {fmt(raw, metric.decimals)} {metric.unit}
-                        {vista === "pct" && pct != null ? ` (${pct > 0 ? "+" : ""}${pct.toFixed(1)}%)` : ""}
-                      </span>
-                    );
-                  })()}
-                  <div style={{ fontSize: 11, color: "#8BA4C0", marginTop: 4 }}>Toca el mismo punto otra vez para ver las tres variables de este salto.</div>
-                </div>
-              ) : (
-                <div style={{ marginTop: 6 }}>
-                  {metricasMostradas.map(metric => {
-                    const raw = chartData[puntoActivo.index][`${metric.key}_raw`];
-                    const pct = chartData[puntoActivo.index][metric.key];
-                    return (
-                      <div key={metric.key} style={{ color: METRIC_CHART_COLOR[metric.key], fontWeight: 700, marginTop: 2 }}>
-                        {metric.label}: {fmt(raw, metric.decimals)} {metric.unit}
-                        {vista === "pct" && pct != null ? ` (${pct > 0 ? "+" : ""}${pct.toFixed(1)}%)` : ""}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          )}
+            )}
+          </div>
           {vista === "pct" && metricasMostradas.length > 1 && (
             <div style={{ ...S.emptySmall, marginBottom: 18 }}>
               Nota: cada variable se muestra como % respecto a su propia media, para poder comparar su forma
@@ -2512,6 +2501,7 @@ const S = {
   motivoRow: { fontSize: 11, color: "#8BA4C0", marginTop: 6, borderTop: "1px dashed #1A3050", paddingTop: 6, lineHeight: 1.4 },
   velocityNote: { fontSize: 11.5, color: "#8BA4C0", marginBottom: 14, maxWidth: 560, lineHeight: 1.5 },
   umbralNote: { fontSize: 11.5, color: "#8BA4C0", marginBottom: 14, maxWidth: 560, lineHeight: 1.5, background: "#122440", border: "1px solid #1A3050", borderRadius: 8, padding: "8px 12px" },
+  chartFloatingTooltip: { position: "absolute", zIndex: 5, background: "#122440", border: "1px solid #1A3050", borderRadius: 8, padding: "8px 12px", fontSize: 12, minWidth: 170, maxWidth: 230, boxShadow: "0 4px 14px rgba(0,0,0,0.4)" },
   barList: { display: "flex", flexDirection: "column", gap: 4 },
   barRow: { display: "grid", gridTemplateColumns: "150px 1fr 60px", alignItems: "center", gap: 10, padding: "4px 0", cursor: "pointer" },
   barLabel: { fontSize: 12.5, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
