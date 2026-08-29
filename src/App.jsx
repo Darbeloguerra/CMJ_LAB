@@ -1979,6 +1979,22 @@ function CargadorCSV({ onFile, issues, rows, onClear }) {
 }
 
 // ================= Shared: Player detail (ficha de jugador) =================
+// Punto de dato ampliado con la unidad de la variable escrita dentro —
+// permite leer a qué corresponde cada punto sin depender del color o de
+// la leyenda, y ayuda a diferenciar variables que coincidan visualmente.
+function crearDotConUnidad(unidad) {
+  return (props) => {
+    const { cx, cy, stroke, index } = props;
+    if (cx == null || cy == null) return null;
+    return (
+      <g key={`dot-${unidad}-${index}`}>
+        <circle cx={cx} cy={cy} r={15} fill={stroke} stroke="#060D1A" strokeWidth={1.5} />
+        <text x={cx} y={cy} dy={3} textAnchor="middle" fontSize={7} fontWeight={700} fill="#060D1A">{unidad}</text>
+      </g>
+    );
+  };
+}
+
 function PlayerDetail({ player, microList, posicion }) {
   const [periodo, setPeriodo] = useState("temporada"); // 'temporada' | 'rango' | 'microciclo'
   const [vista, setVista] = useState("real"); // 'real' | 'pct' — se aplica igual en los 3 periodos
@@ -2178,18 +2194,11 @@ function PlayerDetail({ player, microList, posicion }) {
             </div>
           )}
           <div style={{ marginBottom: 10 }}>
-            <ResponsiveContainer width="100%" height={270}>
-              <LineChart data={chartData} margin={{ top: 10, right: 20, left: -10, bottom: 0 }}>
+            <ResponsiveContainer width="100%" height={300}>
+              <LineChart data={chartData} margin={{ top: 18, right: 20, left: -4, bottom: 6 }}>
                 <CartesianGrid stroke="#1A3050" vertical={false} />
-                <XAxis dataKey="dateLabel" tick={{ fill: "#8BA4C0", fontSize: 11 }} interval="preserveStartEnd" />
-                {vista === "pct" ? (
-                  <YAxis tick={false} domain={dominioChart} allowDataOverflow />
-                ) : (
-                  metricasMostradas.map(metric => (
-                    <YAxis key={metric.key} yAxisId={metric.key} hide
-                      domain={computeDomain(chartData.map(d => d[`${metric.key}_raw`]))} allowDataOverflow />
-                  ))
-                )}
+                <XAxis dataKey="dateLabel" tick={{ fill: "#8BA4C0", fontSize: 11 }} interval="preserveStartEnd" padding={{ left: 20, right: 20 }} />
+                <YAxis tick={{ fill: "#8BA4C0", fontSize: 11 }} domain={dominioChart} allowDataOverflow />
                 <Tooltip
                   contentStyle={{ background: "#122440", border: "1px solid #1A3050", borderRadius: 8, fontSize: 12 }}
                   labelStyle={{ color: "#8BA4C0" }}
@@ -2211,9 +2220,8 @@ function PlayerDetail({ player, microList, posicion }) {
                 {metricasMostradas.map(metric => (
                   <Line key={metric.key} type="monotone"
                     dataKey={vista === "pct" ? metric.key : `${metric.key}_raw`} name={metric.key}
-                    yAxisId={vista === "pct" ? undefined : metric.key}
                     stroke={METRIC_CHART_COLOR[metric.key]} strokeWidth={2} connectNulls
-                    dot={{ r: 3.5, fill: METRIC_CHART_COLOR[metric.key], stroke: "#060D1A", strokeWidth: 1 }} />
+                    dot={crearDotConUnidad(vista === "pct" ? "%" : metric.unit)} />
                 ))}
               </LineChart>
             </ResponsiveContainer>
