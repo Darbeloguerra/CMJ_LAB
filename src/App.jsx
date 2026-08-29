@@ -1982,14 +1982,15 @@ function CargadorCSV({ onFile, issues, rows, onClear }) {
 // Punto de dato ampliado con la unidad de la variable escrita dentro —
 // permite leer a qué corresponde cada punto sin depender del color o de
 // la leyenda, y ayuda a diferenciar variables que coincidan visualmente.
-function crearDotConUnidad(unidad) {
+function crearDotConUnidad(unidad, onDotClick) {
   return (props) => {
-    const { cx, cy, stroke, index } = props;
+    const { cx, cy, stroke, index, dataKey } = props;
     if (cx == null || cy == null) return null;
     return (
-      <g key={`dot-${unidad}-${index}`}>
+      <g key={`dot-${unidad}-${index}`} style={{ cursor: "pointer" }}
+        onClick={() => onDotClick && onDotClick({ index, stroke, dataKey })}>
         <circle cx={cx} cy={cy} r={15} fill={stroke} stroke="#060D1A" strokeWidth={1.5} />
-        <text x={cx} y={cy} dy={3} textAnchor="middle" fontSize={7} fontWeight={700} fill="#060D1A">{unidad}</text>
+        <text x={cx} y={cy} dy={3} textAnchor="middle" fontSize={7} fontWeight={700} fill="#060D1A" style={{ pointerEvents: "none" }}>{unidad}</text>
       </g>
     );
   };
@@ -2008,6 +2009,20 @@ function PlayerDetail({ player, microList, posicion }) {
   const [showControls, setShowControls] = useState(false);
   const [showUmbralInfo, setShowUmbralInfo] = useState(false);
   const [showTablaInfo, setShowTablaInfo] = useState(false);
+  const [puntoActivo, setPuntoActivo] = useState(null); // { index, mode: 'single'|'full', metricKey, color }
+
+  const handleDotClick = ({ index, stroke, dataKey }) => {
+    const metricKey = String(dataKey).replace(/_raw$/, "");
+    setPuntoActivo(prev => {
+      if (!prev || prev.index !== index) {
+        return { index, mode: "single", metricKey, color: stroke };
+      }
+      if (prev.mode === "single") {
+        return { ...prev, mode: "full" };
+      }
+      return { index, mode: "single", metricKey, color: stroke };
+    });
+  };
 
   const [filtroTags, setFiltroTags] = useState(() => new Set(["inicio", "md2", "md1", "sin"]));
   const toggleTag = (k) => setFiltroTags(prev => {
@@ -2058,6 +2073,11 @@ function PlayerDetail({ player, microList, posicion }) {
     });
     return point;
   });
+
+  // Evita mostrar información de un punto que ya no corresponde al gráfico
+  // actual si el jugador, periodo o vista cambian mientras el panel está abierto.
+  useEffect(() => { setPuntoActivo(null); }, [player.nombre, periodo, vista, rango.start, rango.end, filtroTags]);
+
   const dominioChart = computeDomain(
     vista === "pct"
       ? chartData.flatMap(d => metricasMostradas.map(m => d[m.key]))
@@ -2198,34 +2218,58 @@ function PlayerDetail({ player, microList, posicion }) {
               <LineChart data={chartData} margin={{ top: 18, right: 20, left: -4, bottom: 6 }}>
                 <CartesianGrid stroke="#1A3050" vertical={false} />
                 <XAxis dataKey="dateLabel" tick={{ fill: "#8BA4C0", fontSize: 11 }} interval="preserveStartEnd" padding={{ left: 20, right: 20 }} />
-                <YAxis tick={{ fill: "#8BA4C0", fontSize: 11 }} domain={dominioChart} allowDataOverflow />
-                <Tooltip
-                  contentStyle={{ background: "#122440", border: "1px solid #1A3050", borderRadius: 8, fontSize: 12 }}
-                  labelStyle={{ color: "#8BA4C0" }}
-                  formatter={(value, name, entry) => {
-                    const metric = METRICS[name] || METRICS[String(entry.dataKey).replace(/_raw$/, "")];
-                    if (!metric) return [value, name];
-                    if (vista === "pct") {
-                      const raw = entry.payload[`${metric.key}_raw`];
-                      return [value == null ? "—" : `${raw != null ? raw.toFixed(metric.decimals) + " " + metric.unit + " · " : ""}${value > 0 ? "+" : ""}${value.toFixed(1)}%`, metric.label];
-                    }
-                    return [value == null ? "—" : `${value.toFixed(metric.decimals)} ${metric.unit}`, metric.label];
-                  }}
-                  labelFormatter={(label, entry) => {
-                    const tag = entry?.[0]?.payload?.tag;
-                    return tag ? `${label} · ${TAG_META[tag]?.label || ""}` : label;
-                  }}
-                />
+                <YAxis tick={{ fill: "#8BA4C0", fontSize: 11 }} domain={dominioChart} allowDataOverflow tickFormatter={(v) => v.toFixed(1)} />
                 <Legend wrapperStyle={{ fontSize: 12 }} formatter={(value) => METRICS[value]?.label || value} />
                 {metricasMostradas.map(metric => (
                   <Line key={metric.key} type="monotone"
                     dataKey={vista === "pct" ? metric.key : `${metric.key}_raw`} name={metric.key}
                     stroke={METRIC_CHART_COLOR[metric.key]} strokeWidth={2} connectNulls
-                    dot={crearDotConUnidad(vista === "pct" ? "%" : metric.unit)} />
+                    dot={crearDotConUnidad(vista === "pct" ? "%" : metric.unit, handleDotClick)} />
                 ))}
               </LineChart>
             </ResponsiveContainer>
           </div>
+          {puntoActivo != null && chartData[puntoActivo.index] && (
+            <div style={S.umbralNote}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <b>
+                  {chartData[puntoActivo.index].dateLabel}
+                  {chartData[puntoActivo.index].tag ? ` · ${TAG_META[chartData[puntoActivo.index].tag]?.label || ""}` : ""}
+                </b>
+                <button style={S.authLink} onClick={() => setPuntoActivo(null)}>Cerrar</button>
+              </div>
+              {puntoActivo.mode === "single" ? (
+                <div style={{ marginTop: 6 }}>
+                  {(() => {
+                    const metric = METRICS[puntoActivo.metricKey];
+                    if (!metric) return null;
+                    const raw = chartData[puntoActivo.index][`${metric.key}_raw`];
+                    const pct = chartData[puntoActivo.index][metric.key];
+                    return (
+                      <span style={{ color: puntoActivo.color, fontWeight: 700 }}>
+                        {metric.label}: {fmt(raw, metric.decimals)} {metric.unit}
+                        {vista === "pct" && pct != null ? ` (${pct > 0 ? "+" : ""}${pct.toFixed(1)}%)` : ""}
+                      </span>
+                    );
+                  })()}
+                  <div style={{ fontSize: 11, color: "#8BA4C0", marginTop: 4 }}>Toca el mismo punto otra vez para ver las tres variables de este salto.</div>
+                </div>
+              ) : (
+                <div style={{ marginTop: 6 }}>
+                  {metricasMostradas.map(metric => {
+                    const raw = chartData[puntoActivo.index][`${metric.key}_raw`];
+                    const pct = chartData[puntoActivo.index][metric.key];
+                    return (
+                      <div key={metric.key} style={{ color: METRIC_CHART_COLOR[metric.key], fontWeight: 700, marginTop: 2 }}>
+                        {metric.label}: {fmt(raw, metric.decimals)} {metric.unit}
+                        {vista === "pct" && pct != null ? ` (${pct > 0 ? "+" : ""}${pct.toFixed(1)}%)` : ""}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
           {vista === "pct" && metricasMostradas.length > 1 && (
             <div style={{ ...S.emptySmall, marginBottom: 18 }}>
               Nota: cada variable se muestra como % respecto a su propia media, para poder comparar su forma
