@@ -307,6 +307,7 @@ function nivelAccion(delta, status, ambarPct, rojoPct, dayField) {
 // Explicación fisiológica completa de una fila de métrica, para el desplegable.
 function explicacionMetrica(metricKey, delta, status, ambarPct, rojoPct) {
   const info = METRIC_PHYSIO[metricKey];
+  if (status === "gray") return `${info.concepto} Sin datos suficientes todavía para comparar esta variable en este punto.`;
   const sev = severidad(delta, status, ambarPct, rojoPct);
   const texto = status === "red" ? info.rojo : status === "amber" ? info.ambar : info.verde;
   return `${info.concepto} ${texto}${sev ? ` (${sev}).` : ""}`;
@@ -324,10 +325,13 @@ function filasDia(microResult, dayField, umbral) {
     return { key: metric.key, label: metric.label, delta, status, explicacion: explicacionMetrica(metric.key, delta, status, u.ambarPct, u.rojoPct) };
   });
 }
+// Si no hay recuperación calculable (p. ej. es el primer microciclo registrado
+// y no hay MD+1 anterior ni Inicios previos suficientes), se muestran las tres
+// filas igualmente con status "gray" — así queda claro que el test SÍ está
+// registrado, solo que todavía no hay nada con qué comparar su recuperación.
 function filasRecuperacion(recuperacion, umbral) {
-  if (!recuperacion) return [];
   return METRIC_LIST.filter(x => x.drivesStatus).map(metric => {
-    const mm = recuperacion.metrics[metric.key];
+    const mm = recuperacion ? recuperacion.metrics[metric.key] : { delta: null, status: "gray" };
     const u = umbral[metric.key];
     return { key: metric.key, label: metric.label, delta: mm.delta, status: mm.status, explicacion: explicacionMetrica(metric.key, mm.delta, mm.status, u.ambarPct, u.rojoPct) };
   });
@@ -1990,9 +1994,10 @@ function crearDotConUnidad(unidad, onDotClick, metricKey, puntoActivo) {
     return (
       <g key={`dot-${unidad}-${index}`} style={{ cursor: "pointer" }}
         onClick={() => onDotClick && onDotClick({ index, stroke, dataKey, cx, cy })}>
-        <circle cx={cx} cy={cy} r={15} fill={stroke} stroke="#060D1A" strokeWidth={1.5} />
+        <circle cx={cx} cy={cy} r={18} fill="transparent" />
+        <circle cx={cx} cy={cy} r={10} fill={stroke} stroke="#060D1A" strokeWidth={1.5} />
         {mostrarUnidad && (
-          <text x={cx} y={cy} dy={3} textAnchor="middle" fontSize={7} fontWeight={700} fill="#060D1A" style={{ pointerEvents: "none" }}>{unidad}</text>
+          <text x={cx} y={cy} dy={2.5} textAnchor="middle" fontSize={5.5} fontWeight={700} fill="#060D1A" style={{ pointerEvents: "none" }}>{unidad}</text>
         )}
       </g>
     );
