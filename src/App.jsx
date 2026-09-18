@@ -640,21 +640,111 @@ async function apiCall(action, body = {}) {
   return res.json();
 }
 
+// ================= Guardado por trozos (chunking) =================
+// El backend guarda cada "key" como un único valor de texto, y sea cual sea
+// su almacén real (celda de Sheet, PropertiesService...) hay un límite de
+// tamaño por valor bastante bajo — una celda de Google Sheets, por ejemplo,
+// admite como mucho 50.000 caracteres. El dataset completo de una plantilla
+// con muchos jugadores y semanas puede superar ese límite sin avisar: el
+// Apps Script lanza una excepción interna y Google devuelve su página de
+// error genérica en vez del JSON esperado — una respuesta que NO lleva
+// cabecera CORS, así que el navegador la bloquea con un "Access-Control-
+// Allow-Origin" aunque el status sea 200. Es justo lo que se veía en la
+// consola al guardar un CSV con muchos registros.
+//
+// La solución no requiere tocar el Apps Script: se trocea cualquier valor
+// grande en varias claves más pequeñas antes de enviarlo, y se reconstruye
+// al leerlo, de modo que cada trozo se queda muy por debajo de cualquier
+// límite razonable del backend.
+const CHUNK_SIZE = 8000; // caracteres por trozo — margen amplio bajo cualquier límite plausible
+function chunkString(str, size) {
+  const parts = [];
+  for (let i = 0; i < str.length; i += size) parts.push(str.slice(i, i + size));
+  return parts.length ? parts : [""];
+}
+
 // ================= Storage helpers =================
 // Mismo nombre y firma que antes (loadJSON/saveJSON) para no tener que tocar
-// el resto de la app: solo cambia el transporte por debajo.
+// el resto de la app: solo cambia el transporte por debajo. Compatibles con
+// datos guardados por la versión anterior (sin trocear): si no hay "meta" de
+// trozos para esa clave, se cae al formato antiguo de una sola clave.
 async function loadJSON(key, fallback) {
   try {
+    const metaRes = await apiCall("get", { key: `${key}__meta` });
+    if (metaRes.ok && metaRes.value != null) {
+      const meta = JSON.parse(metaRes.value);
+      const n = meta && Number.isFinite(meta.n) ? meta.n : 0;
+      if (n > 0) {
+        const parts = await Promise.all(
+          Array.from({ length: n }, (_, i) => apiCall("get", { key: `${key}__c${i}` }))
+        );
+        if (parts.some(p => !p.ok)) return fallback;
+        const joined = parts.map(p => p.value ?? "").join("");
+        return JSON.parse(joined);
+      }
+    }
+    // Formato antiguo (sin trocear), o clave que nunca se ha guardado.
     const r = await apiCall("get", { key });
     return r.ok && r.value != null ? JSON.parse(r.value) : fallback;
   } catch { return fallback; }
 }
 async function saveJSON(key, value) {
   try {
-    const r = await apiCall("set", { key, value: JSON.stringify(value) });
-    return !!r.ok;
+    const json = JSON.stringify(value);
+    const parts = chunkString(json, CHUNK_SIZE);
+
+    // Si un guardado anterior de esta misma clave usó más trozos que el
+    // actual (p. ej. el dataset se ha reducido), hay que "vaciar" los trozos
+    // sobrantes o quedarían colgados y corromperían la siguiente lectura.
+    let prevN = 0;
+    try {
+      const prevMeta = await apiCall("get", { key: `${key}__meta` });
+      if (prevMeta.ok && prevMeta.value != null) {
+        const pm = JSON.parse(prevMeta.value);
+        if (Number.isFinite(pm.n)) prevN = pm.n;
+      }
+    } catch {}
+
+    const writes = parts.map((part, i) => apiCall("set", { key: `${key}__c${i}`, value: part }));
+    for (let i = parts.length; i < prevN; i++) writes.push(apiCall("set", { key: `${key}__c${i}`, value: "" }));
+    // La "meta" (número de trozos) se escribe la última, para que una lectura
+    // concurrente nunca vea un número de trozos mayor que los ya guardados.
+    const results = await Promise.all(writes);
+    const metaRes = await apiCall("set", { key: `${key}__meta`, value: JSON.stringify({ n: parts.length }) });
+    // Se limpia también la clave antigua sin trocear, para que no queden ahí
+    // datos obsoletos si algo (o una versión previa de la app) la lee directamente.
+    await apiCall("set", { key, value: "" }).catch(() => {});
+    return results.every(r => r && r.ok) && !!metaRes.ok;
   } catch { return false; }
 }
+
+// ================= Formato compacto del dataset =================
+// Además de trocear (arriba), esto reduce el tamaño desde el origen: en vez
+// de guardar cada fila como un objeto con las claves de texto repetidas 196
+// veces ("nombre", "equipo", "peso"...), se guardan solo los valores en un
+// orden fijo — el JSON pesa bastante menos y hacen falta menos trozos (menos
+// peticiones al backend, menos probabilidad de un fallo a mitad de guardado).
+// Compatible hacia atrás: si lo guardado es un array "plano" (formato
+// anterior a este cambio), se devuelve tal cual.
+const DATASET_FIELDS = [
+  "nombre", "equipo", "date", "dateKey", "peso", "hp0", "altura",
+  "fuerza", "potencia", "velocidad", "kineticsValid", "pesoValid", "hp0Valid", "nSaltos"
+];
+function compactRows(rows) {
+  return { v: 1, fields: DATASET_FIELDS, data: rows.map(r => DATASET_FIELDS.map(f => (r[f] === undefined ? null : r[f]))) };
+}
+function expandRows(payload) {
+  if (Array.isArray(payload)) return payload; // formato antiguo: array de objetos
+  if (!payload || !Array.isArray(payload.data)) return [];
+  const fields = payload.fields || DATASET_FIELDS;
+  return payload.data.map(arr => {
+    const o = {};
+    fields.forEach((f, i) => { o[f] = arr[i] === undefined ? null : arr[i]; });
+    return o;
+  });
+}
+async function saveDataset(rows) { return saveJSON(K_DATASET, compactRows(rows)); }
+async function loadDataset() { return expandRows(await loadJSON(K_DATASET, [])); }
 
 // ================= Auth (barrera de acceso) =================
 // La contraseña se valida en el servidor (Apps Script): este archivo nunca
@@ -920,7 +1010,7 @@ function AppContent({ onLogout }) {
   useEffect(() => {
     (async () => {
       const [r, m, t, ro, pl] = await Promise.all([
-        loadJSON(K_DATASET, []), loadJSON(K_MICROCICLOS, []), loadJSON(K_THRESHOLDS, null), loadJSON(K_ROSTER, []), loadJSON(K_PLANTILLAS, [])
+        loadDataset(), loadJSON(K_MICROCICLOS, []), loadJSON(K_THRESHOLDS, null), loadJSON(K_ROSTER, []), loadJSON(K_PLANTILLAS, [])
       ]);
       setRows(r); setMicrociclos(m);
       setRoster(ro.map(x => typeof x === "string" ? { nombre: x, posicion: null, plantillaId: null } : { plantillaId: null, ...x })); // migración de formato antiguo
@@ -943,7 +1033,7 @@ function AppContent({ onLogout }) {
       const { rows: parsed, issues } = parseCSV(ev.target.result);
       setRows(parsed);
       setUploadIssues(issues);
-      const ok = await saveJSON(K_DATASET, parsed);
+      const ok = await saveDataset(parsed);
       setSaveWarning(!ok);
     };
     reader.readAsText(file, "utf-8");
@@ -966,12 +1056,12 @@ function AppContent({ onLogout }) {
 
   const clearDataset = useCallback(async () => {
     setRows([]); setUploadIssues(null);
-    await saveJSON(K_DATASET, []);
+    await saveDataset([]);
   }, []);
 
   const retrySave = useCallback(async () => {
     const results = await Promise.all([
-      saveJSON(K_DATASET, rows), saveJSON(K_MICROCICLOS, microciclos),
+      saveDataset(rows), saveJSON(K_MICROCICLOS, microciclos),
       saveJSON(K_ROSTER, roster), saveJSON(K_THRESHOLDS, { ambarPct, rojoPct, individualizar, protocoloDesde })
     ]);
     setSaveWarning(results.some(ok => !ok));
